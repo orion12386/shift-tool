@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>席位查詢工具</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; padding: 20px; max-width: 600px; margin: 0 auto; }
+        h2 { color: #2c3e50; text-align: center; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        label { font-weight: bold; display: block; margin-bottom: 8px; color: #34495e; }
+        textarea { width: 100%; height: 120px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; margin-bottom: 15px; font-family: monospace; white-space: pre; overflow: auto; }
+        input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-size: 16px; margin-bottom: 15px; text-transform: uppercase; }
+        button { width: 100%; padding: 12px; background-color: #3498db; color: white; border: none; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+        button:hover { background-color: #2980b9; }
+        #result { margin-top: 20px; }
+        .schedule-item { background: #e8f4f8; border-left: 5px solid #3498db; padding: 12px; margin-bottom: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .time { font-weight: bold; color: #2c3e50; font-size: 1.1em; }
+        .seat { background: #3498db; color: white; padding: 4px 10px; border-radius: 15px; font-size: 0.9em; font-weight: bold; }
+        .empty-msg { text-align: center; color: #7f8c8d; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <h2>上席位查詢工具</h2>
+
+    <div class="card">
+        <label for="excelData">1. 貼上 Excel 班表資料</label>
+        <textarea id="excelData" placeholder="請直接從 Excel 框選整個班表範圍（包含表頭），並貼上到這裡..."></textarea>
+
+        <label for="shiftCode">2. 輸入今日代號</label>
+        <input type="text" id="shiftCode" placeholder="例如：KH1, NKH2">
+
+        <button onclick="generateSchedule()">產生今日行程</button>
+    </div>
+
+    <div id="result"></div>
+
+    <script>
+        function generateSchedule() {
+            const rawData = document.getElementById('excelData').value.trim();
+            const code = document.getElementById('shiftCode').value.trim().toUpperCase();
+            const resultDiv = document.getElementById('result');
+
+            if (!rawData || !code) {
+                alert('請確實貼上資料並輸入代號！');
+                return;
+            }
+
+            // 解析貼上的 Excel TSV 資料
+            const rows = rawData.split('\n').map(row => row.split('\t'));
+            const headers = rows[0];
+            
+            // 動態找出時間欄位與對應的席位欄位 (支援右側第二區塊的 KHCO)
+            let blocks = [];
+            let currentBlock = null;
+
+            for (let j = 0; j < headers.length; j++) {
+                const header = headers[j] ? headers[j].trim() : "";
+                if (header === "開始時間") {
+                    if (currentBlock) blocks.push(currentBlock);
+                    currentBlock = { startCol: j, endCol: j + 1, seatCols: [] };
+                    j++; // 跳過下一個預期的 "結束時間"
+                } else if (header && header !== "結束時間" && currentBlock) {
+                    currentBlock.seatCols.push({ name: header, colIndex: j });
+                }
+            }
+            if (currentBlock) blocks.push(currentBlock);
+
+            let schedule = [];
+
+            // 掃描每一列尋找代號
+            for (let i = 1; i < rows.length; i++) {
+                const cols = rows[i];
+                blocks.forEach(block => {
+                    if (cols.length > block.startCol && cols.length > block.endCol) {
+                        const startTime = cols[block.startCol] ? cols[block.startCol].trim() : "";
+                        const endTime = cols[block.endCol] ? cols[block.endCol].trim() : "";
+
+                        if (startTime && endTime) {
+                            block.seatCols.forEach(seat => {
+                                if (cols.length > seat.colIndex) {
+                                    const cellValue = cols[seat.colIndex] ? cols[seat.colIndex].trim().toUpperCase() : "";
+                                    if (cellValue === code) {
+                                        schedule.push({ start: startTime, end: endTime, seat: seat.name });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+
+            // 依照開始時間排序 (避免左右兩塊表格的時間交錯)
+            schedule.sort((a, b) => a.start.localeCompare(b.start));
+
+            // 合併同席位且連續的時間
+            let mergedSchedule = [];
+            if (schedule.length > 0) {
+                let currentSlot = { ...schedule[0] };
+
+                for (let i = 1; i < schedule.length; i++) {
+                    const nextSlot = schedule[i];
+                    if (currentSlot.end === nextSlot.start && currentSlot.seat === nextSlot.seat) {
+                        currentSlot.end = nextSlot.end; // 延長時段
+                    } else {
+                        mergedSchedule.push(currentSlot);
+                        currentSlot = { ...nextSlot };
+                    }
+                }
+                mergedSchedule.push(currentSlot);
+            }
+
+            // 顯示結果
+            if (mergedSchedule.length === 0) {
+                resultDiv.innerHTML = `<div class="card empty-msg">找不到代號 <strong>[ ${code} ]</strong> 的排班資訊。</div>`;
+                return;
+            }
+
+            let html = `<h3>[ ${code} ] 今日席位行程</h3>`;
+            mergedSchedule.forEach(slot => {
+                html += `
+                    <div class="schedule-item">
+                        <span class="time">${slot.start} - ${slot.end}</span>
+                        <span class="seat">${slot.seat}</span>
+                    </div>
+                `;
+            });
+            resultDiv.innerHTML = html;
+        }
+    </script>
+</body>
+</html>
